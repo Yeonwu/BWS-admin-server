@@ -11,9 +11,10 @@ async function verifyAdmin(req, res, next) {
         const decoded = await auth.verifyIdToken(token);
         if (decoded.uid !== adminUid) {
             req.isAdmin = false;
+        } else {
+            req.isAdmin = true;
         }
 
-        req.isAdmin = true;
         next();
     } catch (error) {
         req.isAdmin = false;
