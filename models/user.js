@@ -62,6 +62,12 @@ async function getAll(year) {
 
 async function update(users) {
     const batch = db.batch();
+    const snapshot = await userCol.get();
+    const firebaseUsers = querySnapshotToArr(snapshot, (user) => {
+        user.uid = user.ref._path.segments[1];
+        return user;
+    });
+
     let errors = [];
 
     users.forEach((user) => {
@@ -73,10 +79,10 @@ async function update(users) {
                 uid: String,
                 email: Maybe String,
                 name: Maybe String,
-                type: String,
-                history: Array[{
-                    adviser: Object{uid: String, name: String},
-                    grade: String,
+                type: Maybe String,
+                history: Maybe Array[{
+                    adviser: Maybe Object{uid: String, name: String},
+                    grade: Maybe String,
                     year: String
                 }],
             }`,
@@ -92,7 +98,6 @@ async function update(users) {
                 }
                 auth.updateUser(user.uid, updateInfo);
 
-                updateInfo = {};
                 if (user.type) {
                     updateInfo.auth = user.type;
                 }
@@ -107,7 +112,15 @@ async function update(users) {
                     updateInfo.history = FieldValue.arrayUnion(...user.history);
                 }
 
-                batch.update(ref, updateInfo);
+                let userHasHistory = firebaseUsers.find(
+                    (firebaseUser) => firebaseUser.uid == user.uid
+                )?.history;
+
+                if (userHasHistory) {
+                    batch.update(ref, updateInfo);
+                } else {
+                    batch.set(ref, updateInfo);
+                }
             } else {
                 throw {
                     uid: user.uid,
