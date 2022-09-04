@@ -28,3 +28,7 @@ export function querySnapshotToArr(querySnapshot, formatter) {
 
     return arr;
 }
+
+export function todayWithoutTime() {
+    return new Date().toISOString().slice(0, 10);
+}

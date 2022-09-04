@@ -1,14 +1,30 @@
 import { db } from "../utils/firebase.js";
-import { querySnapshotToArr } from "../utils/utils.js";
+import { querySnapshotToArr, todayWithoutTime } from "../utils/utils.js";
 import { getAuth } from "firebase-admin/auth";
 import { typeCheck } from "type-check";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import NodeCache from "node-cache";
 
 const User = { getAll, update, add, remove };
 const userCol = db.collection("users");
 const auth = getAuth();
 
+const cache = new NodeCache({ stdTTL: 0 });
+
 async function getAll(year) {
+    let userCache = cache.get("users");
+
+    // Check if cache available and created today.
+    // Firebase quota is counted per day.
+    if (userCache) {
+        if (userCache.createdAt == todayWithoutTime()) {
+            console.log("cached");
+            return userCache.data;
+        } else {
+            cache.del("users");
+        }
+    }
+
     const snapshot = await userCol.get();
 
     const users = (await auth.listUsers(1000)).users;
@@ -19,7 +35,6 @@ async function getAll(year) {
         let ref = user.ref._path.segments[1];
         user = user.data();
         user.uid = ref;
-
         // Create user.adviser and user.grade if exists
         if (user.history) {
             user.history.sort(newOneFirst);
@@ -39,7 +54,7 @@ async function getAll(year) {
     });
 
     // Join Firebase user & Firestore user.
-    return users.map((user) => {
+    let joinedUser = users.map((user) => {
         let newUser = {};
 
         // Pick required info.
@@ -56,8 +71,29 @@ async function getAll(year) {
         newUser.adviser = info?.adviser;
         newUser.grade = info?.grade;
 
+        // remove properties that cause trouble with cache
+        if (newUser.adviser) {
+            newUser.adviser.ref._firestore = {};
+            newUser.adviser.ref._converter = {};
+        }
+
         return newUser;
     });
+
+    // Set Cache
+    userCache = {
+        data: joinedUser,
+        createdAt: todayWithoutTime(),
+    };
+
+    try {
+        cache.set("users", userCache, 0);
+    } catch (error) {
+        console.error("Failed to save user cache.");
+        console.error(error);
+    }
+
+    return joinedUser;
 }
 
 async function update(users) {
@@ -97,6 +133,7 @@ async function update(users) {
                     updateInfo.displayName = user.name;
                 }
                 auth.updateUser(user.uid, updateInfo);
+                updateInfo = {};
 
                 if (user.type) {
                     updateInfo.auth = user.type;
@@ -104,17 +141,18 @@ async function update(users) {
                 if (user.history) {
                     let timestamp = Timestamp.fromDate(new Date());
                     user.history.forEach((val) => {
-                        val.adviser.ref = userCol.doc(val.adviser.uid);
+                        if (val.adviser?.uid) {
+                            val.adviser.ref = userCol.doc(val.adviser.uid);
+                            delete val.adviser.uid;
+                        }
                         val.createdAt = timestamp;
-
-                        delete val.adviser.uid;
                     });
                     updateInfo.history = FieldValue.arrayUnion(...user.history);
                 }
 
                 let userHasHistory = firebaseUsers.find(
                     (firebaseUser) => firebaseUser.uid == user.uid
-                )?.history;
+                ).history;
 
                 if (userHasHistory) {
                     batch.update(ref, updateInfo);
@@ -138,6 +176,7 @@ async function update(users) {
         throw errors;
     }
 
+    cache.del("users");
     return {
         message: "success",
     };
@@ -210,6 +249,7 @@ async function add(users) {
         throw failedUsers;
     }
 
+    cache.del("users");
     return {
         message: "success",
     };
@@ -237,6 +277,7 @@ async function remove(uids) {
     });
     await batch.commit();
 
+    cache.del("users");
     return returnVal;
 }
 
